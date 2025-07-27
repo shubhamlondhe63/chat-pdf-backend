@@ -6,15 +6,177 @@ const fs = require("fs-extra");
 const { v4: uuidv4 } = require("uuid");
 const pdfParse = require("pdf-parse");
 const OpenAI = require("openai");
+const swaggerJsdoc = require("swagger-jsdoc");
+const swaggerUi = require("swagger-ui-express");
 require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Swagger configuration
+const swaggerOptions = {
+	definition: {
+		openapi: "3.0.0",
+		info: {
+			title: "PDF Chat API",
+			version: "1.0.0",
+			description: "A RESTful API for uploading, processing, and chatting with PDF documents using AI",
+			contact: {
+				name: "PDF Chat App",
+				email: "support@pdfchatapp.com",
+			},
+			license: {
+				name: "MIT",
+				url: "https://opensource.org/licenses/MIT",
+			},
+		},
+		servers: [
+			{
+				url: `http://localhost:${PORT}`,
+				description: "Development server",
+			},
+		],
+		components: {
+			schemas: {
+				PDFUploadResponse: {
+					type: "object",
+					properties: {
+						id: {
+							type: "string",
+							description: "Unique identifier for the uploaded PDF",
+						},
+						filename: {
+							type: "string",
+							description: "Original filename of the uploaded PDF",
+						},
+						pages: {
+							type: "integer",
+							description: "Number of pages in the PDF",
+						},
+						text: {
+							type: "string",
+							description: "Extracted text from the PDF",
+						},
+						vectors: {
+							type: "array",
+							description: "Vector embeddings of the text (for future use)",
+						},
+						uploadDate: {
+							type: "string",
+							format: "date-time",
+							description: "Timestamp when the PDF was uploaded",
+						},
+					},
+				},
+				ChatRequest: {
+					type: "object",
+					required: ["message"],
+					properties: {
+						message: {
+							type: "string",
+							description: "The user's question or message",
+						},
+						pdfId: {
+							type: "string",
+							description: "Optional PDF ID to provide context from a specific document",
+						},
+					},
+				},
+				ChatResponse: {
+					type: "object",
+					properties: {
+						message: {
+							type: "string",
+							description: "AI-generated response",
+						},
+						citations: {
+							type: "array",
+							items: {
+								type: "object",
+								properties: {
+									page: {
+										type: "integer",
+										description: "Page number where the citation was found",
+									},
+									text: {
+										type: "string",
+										description: "Relevant text snippet",
+									},
+									confidence: {
+										type: "number",
+										description: "Confidence score of the citation",
+									},
+								},
+							},
+						},
+						tokenUsage: {
+							type: "integer",
+							description: "Number of tokens used in the AI request",
+						},
+					},
+				},
+				SearchRequest: {
+					type: "object",
+					required: ["query"],
+					properties: {
+						query: {
+							type: "string",
+							description: "Search term to find in the PDF",
+						},
+					},
+				},
+				SearchResult: {
+					type: "object",
+					properties: {
+						line: {
+							type: "string",
+							description: "Matching line of text",
+						},
+						lineNumber: {
+							type: "integer",
+							description: "Line number in the document",
+						},
+						page: {
+							type: "integer",
+							description: "Estimated page number",
+						},
+					},
+				},
+				Error: {
+					type: "object",
+					properties: {
+						error: {
+							type: "string",
+							description: "Error message",
+						},
+						details: {
+							type: "string",
+							description: "Additional error details (only in development)",
+						},
+					},
+				},
+			},
+		},
+	},
+	apis: ["./server.js"], // Path to the API docs
+};
+
+const specs = swaggerJsdoc(swaggerOptions);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.static("uploads"));
+
+// Swagger UI
+app.use(
+	"/api-docs",
+	swaggerUi.serve,
+	swaggerUi.setup(specs, {
+		customCss: ".swagger-ui .topbar { display: none }",
+		customSiteTitle: "PDF Chat API Documentation",
+	}),
+);
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -53,7 +215,44 @@ const pdfStore = new Map();
 
 // Routes
 
-// Upload PDF
+/**
+ * @swagger
+ * /api/upload-pdf:
+ *   post:
+ *     summary: Upload a PDF file
+ *     description: Upload a PDF file for processing and text extraction. The file will be stored and can be used for chat and search functionality.
+ *     tags: [PDF Management]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pdf:
+ *                 type: string
+ *                 format: binary
+ *                 description: PDF file to upload (max 50MB)
+ *     responses:
+ *       200:
+ *         description: PDF uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PDFUploadResponse'
+ *       400:
+ *         description: No PDF file uploaded or invalid file type
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error during PDF processing
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post("/api/upload-pdf", upload.single("pdf"), async (req, res) => {
 	try {
 		if (!req.file) {
@@ -144,7 +343,41 @@ app.post("/api/upload-pdf", upload.single("pdf"), async (req, res) => {
 	}
 });
 
-// Get PDF file
+/**
+ * @swagger
+ * /api/pdf/{id}/file:
+ *   get:
+ *     summary: Get PDF file
+ *     description: Retrieve the actual PDF file by its ID. Returns the PDF file for viewing or download.
+ *     tags: [PDF Management]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PDF ID
+ *     responses:
+ *       200:
+ *         description: PDF file returned successfully
+ *         content:
+ *           application/pdf:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       404:
+ *         description: PDF not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.get("/api/pdf/:id/file", (req, res) => {
 	try {
 		const pdfId = req.params.id;
@@ -172,7 +405,41 @@ app.get("/api/pdf/:id/file", (req, res) => {
 	}
 });
 
-// Get PDF text
+/**
+ * @swagger
+ * /api/pdf/{id}/text:
+ *   get:
+ *     summary: Get PDF text content
+ *     description: Retrieve the extracted text content from a PDF by its ID.
+ *     tags: [PDF Management]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PDF ID
+ *     responses:
+ *       200:
+ *         description: PDF text content returned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: string
+ *               description: Extracted text from the PDF
+ *       404:
+ *         description: PDF not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.get("/api/pdf/:id/text", (req, res) => {
 	try {
 		const pdfId = req.params.id;
@@ -188,7 +455,48 @@ app.get("/api/pdf/:id/text", (req, res) => {
 	}
 });
 
-// Search PDF
+/**
+ * @swagger
+ * /api/pdf/{id}/search:
+ *   post:
+ *     summary: Search within PDF content
+ *     description: Search for specific text within a PDF document and return matching lines with their locations.
+ *     tags: [PDF Search]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PDF ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/SearchRequest'
+ *     responses:
+ *       200:
+ *         description: Search results returned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/SearchResult'
+ *       404:
+ *         description: PDF not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Search failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post("/api/pdf/:id/search", async (req, res) => {
 	try {
 		const pdfId = req.params.id;
@@ -219,7 +527,48 @@ app.post("/api/pdf/:id/search", async (req, res) => {
 	}
 });
 
-// Get page content
+/**
+ * @swagger
+ * /api/pdf/{id}/page/{pageNumber}:
+ *   get:
+ *     summary: Get specific page content
+ *     description: Retrieve the text content of a specific page from a PDF document.
+ *     tags: [PDF Management]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: PDF ID
+ *       - in: path
+ *         name: pageNumber
+ *         required: true
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *         description: Page number (1-based)
+ *     responses:
+ *       200:
+ *         description: Page content returned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: string
+ *               description: Text content of the specified page
+ *       404:
+ *         description: PDF not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Failed to get page content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.get("/api/pdf/:id/page/:pageNumber", (req, res) => {
 	try {
 		const pdfId = req.params.id;
@@ -244,7 +593,33 @@ app.get("/api/pdf/:id/page/:pageNumber", (req, res) => {
 	}
 });
 
-// Chat endpoint
+/**
+ * @swagger
+ * /api/chat:
+ *   post:
+ *     summary: Chat with AI about PDF content
+ *     description: Send a message to the AI assistant. If a PDF ID is provided, the AI will use the PDF content as context for answering questions.
+ *     tags: [AI Chat]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ChatRequest'
+ *     responses:
+ *       200:
+ *         description: AI response generated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ChatResponse'
+ *       500:
+ *         description: Failed to process chat request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 app.post("/api/chat", async (req, res) => {
 	try {
 		const { message, pdfId } = req.body;
@@ -327,7 +702,29 @@ app.post("/api/chat", async (req, res) => {
 	}
 });
 
-// Health check
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     summary: Health check endpoint
+ *     description: Check if the API server is running and healthy.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Server is healthy
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: "OK"
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ *                   example: "2024-01-01T00:00:00.000Z"
+ */
 app.get("/api/health", (req, res) => {
 	res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
@@ -342,4 +739,5 @@ app.use((error, req, res, next) => {
 app.listen(PORT, () => {
 	console.log(`PDF Chat Backend running on port ${PORT}`);
 	console.log(`Health check: http://localhost:${PORT}/api/health`);
+	console.log(`API Documentation: http://localhost:${PORT}/api-docs`);
 });
