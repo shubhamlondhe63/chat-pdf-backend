@@ -13,6 +13,9 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Enable trust proxy for deployment platforms like Render
+app.set("trust proxy", 1);
+
 // Swagger configuration
 const swaggerOptions = {
 	definition: {
@@ -34,6 +37,10 @@ const swaggerOptions = {
 			{
 				url: `http://localhost:${PORT}`,
 				description: "Development server",
+			},
+			{
+				url: "https://chat-pdf-backend-tavn.onrender.com",
+				description: "Production server (Render)",
 			},
 		],
 		components: {
@@ -177,6 +184,22 @@ app.use(
 		customSiteTitle: "PDF Chat API Documentation",
 	}),
 );
+
+// Root route for deployment health check
+app.get("/", (req, res) => {
+	res.json({
+		message: "PDF Chat API Server",
+		version: "1.0.0",
+		status: "running",
+		endpoints: {
+			health: "/api/health",
+			docs: "/api-docs",
+			upload: "/api/upload-pdf",
+			chat: "/api/chat",
+		},
+		timestamp: new Date().toISOString(),
+	});
+});
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -727,6 +750,25 @@ app.post("/api/chat", async (req, res) => {
  */
 app.get("/api/health", (req, res) => {
 	res.json({ status: "OK", timestamp: new Date().toISOString() });
+});
+
+// Catch-all route for undefined endpoints
+app.use("*", (req, res) => {
+	res.status(404).json({
+		error: "Endpoint not found",
+		message: "The requested endpoint does not exist",
+		availableEndpoints: {
+			root: "/",
+			health: "/api/health",
+			docs: "/api-docs",
+			upload: "/api/upload-pdf",
+			chat: "/api/chat",
+			pdfFile: "/api/pdf/:id/file",
+			pdfText: "/api/pdf/:id/text",
+			pdfSearch: "/api/pdf/:id/search",
+			pdfPage: "/api/pdf/:id/page/:pageNumber",
+		},
+	});
 });
 
 // Error handling middleware
